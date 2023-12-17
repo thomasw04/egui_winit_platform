@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use copypasta::{ClipboardContext, ClipboardProvider};
 use egui::{
     emath::{pos2, vec2},
-    Context, Key, Pos2,
+    Context, Pos2,
 };
 use winit::{
     dpi::PhysicalSize,
-    event::{Event, ModifiersState, TouchPhase, VirtualKeyCode, VirtualKeyCode::*, WindowEvent::*},
-    window::CursorIcon,
+    event::{Event, TouchPhase, WindowEvent::*, Ime},
+    window::CursorIcon, keyboard::{ModifiersState, self, NamedKey, Key, SmolStr},
 };
 
 /// Configures the creation of the `Platform`.
@@ -61,7 +61,7 @@ pub struct Platform {
     scale_factor: f64,
     context: Context,
     raw_input: egui::RawInput,
-    modifier_state: ModifiersState,
+    modifier: ModifiersState,
     pointer_pos: Option<egui::Pos2>,
 
     #[cfg(feature = "clipboard")]
@@ -100,7 +100,7 @@ impl Platform {
             scale_factor: descriptor.scale_factor,
             context,
             raw_input,
-            modifier_state: winit::event::ModifiersState::empty(),
+            modifier: winit::keyboard::ModifiersState::empty(),
             pointer_pos: Some(Pos2::default()),
             #[cfg(feature = "clipboard")]
             clipboard: ClipboardContext::new().ok(),
@@ -134,15 +134,10 @@ impl Platform {
                 }
                 ScaleFactorChanged {
                     scale_factor,
-                    new_inner_size,
+                    inner_size_writer: _,
                 } => {
                     self.scale_factor = *scale_factor;
                     self.raw_input.pixels_per_point = Some(*scale_factor as f32);
-                    self.raw_input.screen_rect = Some(egui::Rect::from_min_size(
-                        Default::default(),
-                        vec2(new_inner_size.width as f32, new_inner_size.height as f32)
-                            / self.scale_factor as f32,
-                    ));
                 }
                 MouseInput { state, button, .. } => {
                     if let winit::event::MouseButton::Other(..) = button {
@@ -159,6 +154,12 @@ impl Platform {
                                     winit::event::MouseButton::Middle => {
                                         egui::PointerButton::Middle
                                     }
+                                    winit::event::MouseButton::Back => {
+                                        egui::PointerButton::Extra1
+                                    },
+                                    winit::event::MouseButton::Forward => {
+                                        egui::PointerButton::Extra2
+                                    },
                                     winit::event::MouseButton::Other(_) => unreachable!(),
                                 },
                                 pressed: *state == winit::event::ElementState::Pressed,
@@ -294,22 +295,42 @@ impl Platform {
                     self.raw_input.events.push(egui::Event::PointerGone);
                 }
                 ModifiersChanged(input) => {
-                    self.modifier_state = *input;
-                    self.raw_input.modifiers = winit_to_egui_modifiers(*input);
+                    self.modifier = input.state();
+                    self.raw_input.modifiers = winit_to_egui_modifiers(input.state());
                 }
-                KeyboardInput { input, .. } => {
-                    if let Some(virtual_keycode) = input.virtual_keycode {
-                        let pressed = input.state == winit::event::ElementState::Pressed;
-                        let ctrl = self.modifier_state.ctrl();
+                Ime(ime) => {
+                    match ime {
+                        Ime::Enabled => {
+                            self.raw_input.events.push(egui::Event::CompositionStart);
+                        },
+                        Ime::Preedit(str, _) => {
+                            self.raw_input.events.push(egui::Event::CompositionUpdate(str.clone()));
+                        },
+                        Ime::Commit(str) => {
+                            self.raw_input.events.push(egui::Event::CompositionEnd(str.clone()));
+                            //Start a new composition as it is not disabled.
+                            self.raw_input.events.push(egui::Event::CompositionStart);
+                        },
+                        Ime::Disabled => {
+                            //Just disable with no input.
+                            self.raw_input.events.push(egui::Event::CompositionEnd("".to_string()));
+                        }
+                    };
+                },
+                KeyboardInput { event, .. } => {
+                    let pressed = event.state == winit::event::ElementState::Pressed;
 
-                        match (pressed, ctrl, virtual_keycode) {
-                            (true, true, VirtualKeyCode::C) => {
+                    if let Some(text) = event.text.as_ref().filter(|s| s.len() > 1) {
+                        self.raw_input.events.push(egui::Event::Text(text.to_string()));
+                    } else {
+                        match event.logical_key {
+                            keyboard::Key::Named(NamedKey::Copy) => {
                                 self.raw_input.events.push(egui::Event::Copy)
-                            }
-                            (true, true, VirtualKeyCode::X) => {
+                            },
+                            keyboard::Key::Named(NamedKey::Cut) => {
                                 self.raw_input.events.push(egui::Event::Cut)
-                            }
-                            (true, true, VirtualKeyCode::V) => {
+                            },
+                            keyboard::Key::Named(NamedKey::Paste) => {
                                 #[cfg(feature = "clipboard")]
                                 if let Some(ref mut clipboard) = self.clipboard {
                                     if let Ok(contents) = clipboard.get_contents() {
@@ -318,26 +339,16 @@ impl Platform {
                                 }
                             }
                             _ => {
-                                if let Some(key) = winit_to_egui_key_code(virtual_keycode) {
+                                if let Some(key) = winit_to_egui_key_code(event.logical_key.clone()) {
                                     self.raw_input.events.push(egui::Event::Key {
                                         key,
                                         pressed,
-                                        modifiers: winit_to_egui_modifiers(self.modifier_state),
+                                        modifiers: winit_to_egui_modifiers(self.modifier),
                                         repeat: false,
                                     });
                                 }
                             }
                         }
-                    }
-                }
-                ReceivedCharacter(ch) => {
-                    if is_printable(*ch)
-                        && !self.modifier_state.ctrl()
-                        && !self.modifier_state.logo()
-                    {
-                        self.raw_input
-                            .events
-                            .push(egui::Event::Text(ch.to_string()));
                     }
                 }
                 _ => {}
@@ -355,7 +366,7 @@ impl Platform {
                 window_id: _window_id,
                 event,
             } => match event {
-                ReceivedCharacter(_) | KeyboardInput { .. } | ModifiersChanged(_) => {
+                Ime(_) | KeyboardInput { .. } | ModifiersChanged(_) => {
                     self.context().wants_keyboard_input()
                 }
 
@@ -426,59 +437,98 @@ impl Platform {
 
 /// Translates winit to egui keycodes.
 #[inline]
-fn winit_to_egui_key_code(key: VirtualKeyCode) -> Option<egui::Key> {
+fn winit_to_egui_key_code(key: Key) -> Option<egui::Key> {
+
+    const KEY1: SmolStr = SmolStr::new_inline("1");
+    const KEY2: SmolStr = SmolStr::new_inline("2");
+    const KEY3: SmolStr = SmolStr::new_inline("3");
+    const KEY4: SmolStr = SmolStr::new_inline("4");
+    const KEY5: SmolStr = SmolStr::new_inline("5");
+    const KEY6: SmolStr = SmolStr::new_inline("6");
+    const KEY7: SmolStr = SmolStr::new_inline("7");
+    const KEY8: SmolStr = SmolStr::new_inline("8");
+    const KEY9: SmolStr = SmolStr::new_inline("9");
+    const KEY0: SmolStr = SmolStr::new_inline("0");
+
+    const KEY_A: SmolStr = SmolStr::new_inline("a");
+    const KEY_B: SmolStr = SmolStr::new_inline("b");
+    const KEY_C: SmolStr = SmolStr::new_inline("c");
+    const KEY_D: SmolStr = SmolStr::new_inline("d");
+    const KEY_E: SmolStr = SmolStr::new_inline("e");
+    const KEY_F: SmolStr = SmolStr::new_inline("f");
+    const KEY_G: SmolStr = SmolStr::new_inline("g");
+    const KEY_H: SmolStr = SmolStr::new_inline("h");
+    const KEY_I: SmolStr = SmolStr::new_inline("i");
+    const KEY_J: SmolStr = SmolStr::new_inline("j");
+    const KEY_K: SmolStr = SmolStr::new_inline("k");
+    const KEY_L: SmolStr = SmolStr::new_inline("l");
+    const KEY_M: SmolStr = SmolStr::new_inline("m");
+    const KEY_N: SmolStr = SmolStr::new_inline("n");
+    const KEY_O: SmolStr = SmolStr::new_inline("o");
+    const KEY_P: SmolStr = SmolStr::new_inline("p");
+    const KEY_Q: SmolStr = SmolStr::new_inline("q");
+    const KEY_R: SmolStr = SmolStr::new_inline("r");
+    const KEY_S: SmolStr = SmolStr::new_inline("s");
+    const KEY_T: SmolStr = SmolStr::new_inline("t");
+    const KEY_U: SmolStr = SmolStr::new_inline("u");
+    const KEY_V: SmolStr = SmolStr::new_inline("v");
+    const KEY_W: SmolStr = SmolStr::new_inline("w");
+    const KEY_X: SmolStr = SmolStr::new_inline("x");
+    const KEY_Y: SmolStr = SmolStr::new_inline("y");
+    const KEY_Z: SmolStr = SmolStr::new_inline("z");
+
     Some(match key {
-        Escape => Key::Escape,
-        Insert => Key::Insert,
-        Home => Key::Home,
-        Delete => Key::Delete,
-        End => Key::End,
-        PageDown => Key::PageDown,
-        PageUp => Key::PageUp,
-        Left => Key::ArrowLeft,
-        Up => Key::ArrowUp,
-        Right => Key::ArrowRight,
-        Down => Key::ArrowDown,
-        Back => Key::Backspace,
-        Return => Key::Enter,
-        Tab => Key::Tab,
-        Space => Key::Space,
-        Key1 => Key::Num1,
-        Key2 => Key::Num2,
-        Key3 => Key::Num3,
-        Key4 => Key::Num4,
-        Key5 => Key::Num5,
-        Key6 => Key::Num6,
-        Key7 => Key::Num7,
-        Key8 => Key::Num8,
-        Key9 => Key::Num9,
-        Key0 => Key::Num0,
-        A => Key::A,
-        B => Key::B,
-        C => Key::C,
-        D => Key::D,
-        E => Key::E,
-        F => Key::F,
-        G => Key::G,
-        H => Key::H,
-        I => Key::I,
-        J => Key::J,
-        K => Key::K,
-        L => Key::L,
-        M => Key::M,
-        N => Key::N,
-        O => Key::O,
-        P => Key::P,
-        Q => Key::Q,
-        R => Key::R,
-        S => Key::S,
-        T => Key::T,
-        U => Key::U,
-        V => Key::V,
-        W => Key::W,
-        X => Key::X,
-        Y => Key::Y,
-        Z => Key::Z,
+        Key::Named(NamedKey::Escape) => egui::Key::Escape,
+        Key::Named(NamedKey::Insert) => egui::Key::Insert,
+        Key::Named(NamedKey::Home) => egui::Key::Home,
+        Key::Named(NamedKey::Delete) => egui::Key::Delete,
+        Key::Named(NamedKey::End) => egui::Key::End,
+        Key::Named(NamedKey::PageDown) => egui::Key::PageDown,
+        Key::Named(NamedKey::PageUp) => egui::Key::PageUp,
+        Key::Named(NamedKey::ArrowLeft) => egui::Key::ArrowLeft,
+        Key::Named(NamedKey::ArrowUp) => egui::Key::ArrowUp,
+        Key::Named(NamedKey::ArrowRight) => egui::Key::ArrowRight,
+        Key::Named(NamedKey::ArrowDown) => egui::Key::ArrowDown,
+        Key::Named(NamedKey::Backspace) => egui::Key::Backspace,
+        Key::Named(NamedKey::Enter) => egui::Key::Enter,
+        Key::Named(NamedKey::Tab) => egui::Key::Tab,
+        Key::Named(NamedKey::Space) => egui::Key::Space,
+        Key::Character(c) if c == KEY1 => egui::Key::Num1,
+        Key::Character(c) if c == KEY2 => egui::Key::Num2,
+        Key::Character(c) if c == KEY3 => egui::Key::Num3,
+        Key::Character(c) if c == KEY4 => egui::Key::Num4,
+        Key::Character(c) if c == KEY5 => egui::Key::Num5,
+        Key::Character(c) if c == KEY6 => egui::Key::Num6,
+        Key::Character(c) if c == KEY7 => egui::Key::Num7,
+        Key::Character(c) if c == KEY8 => egui::Key::Num8,
+        Key::Character(c) if c == KEY9 => egui::Key::Num9,
+        Key::Character(c) if c == KEY0 => egui::Key::Num0,
+        Key::Character(c) if c == KEY_A => egui::Key::A,
+        Key::Character(c) if c == KEY_B => egui::Key::B,
+        Key::Character(c) if c == KEY_C => egui::Key::C,
+        Key::Character(c) if c == KEY_D => egui::Key::D,
+        Key::Character(c) if c == KEY_E => egui::Key::E,
+        Key::Character(c) if c == KEY_F => egui::Key::F,
+        Key::Character(c) if c == KEY_G => egui::Key::G,
+        Key::Character(c) if c == KEY_H => egui::Key::H,
+        Key::Character(c) if c == KEY_I => egui::Key::I,
+        Key::Character(c) if c == KEY_J => egui::Key::J,
+        Key::Character(c) if c == KEY_K => egui::Key::K,
+        Key::Character(c) if c == KEY_L => egui::Key::L,
+        Key::Character(c) if c == KEY_M => egui::Key::M,
+        Key::Character(c) if c == KEY_N => egui::Key::N,
+        Key::Character(c) if c == KEY_O => egui::Key::O,
+        Key::Character(c) if c == KEY_P => egui::Key::P,
+        Key::Character(c) if c == KEY_Q => egui::Key::Q,
+        Key::Character(c) if c == KEY_R => egui::Key::R,
+        Key::Character(c) if c == KEY_S => egui::Key::S,
+        Key::Character(c) if c == KEY_T => egui::Key::T,
+        Key::Character(c) if c == KEY_U => egui::Key::U,
+        Key::Character(c) if c == KEY_V => egui::Key::V,
+        Key::Character(c) if c == KEY_W => egui::Key::W,
+        Key::Character(c) if c == KEY_X => egui::Key::X,
+        Key::Character(c) if c == KEY_Y => egui::Key::Y,
+        Key::Character(c) if c == KEY_Z => egui::Key::Z,
         _ => {
             return None;
         }
@@ -489,17 +539,17 @@ fn winit_to_egui_key_code(key: VirtualKeyCode) -> Option<egui::Key> {
 #[inline]
 fn winit_to_egui_modifiers(modifiers: ModifiersState) -> egui::Modifiers {
     egui::Modifiers {
-        alt: modifiers.alt(),
-        ctrl: modifiers.ctrl(),
-        shift: modifiers.shift(),
+        alt: modifiers.alt_key(),
+        ctrl: modifiers.control_key(),
+        shift: modifiers.shift_key(),
         #[cfg(target_os = "macos")]
-        mac_cmd: modifiers.logo(),
+        mac_cmd: modifiers.super_key(),
         #[cfg(target_os = "macos")]
-        command: modifiers.logo(),
+        command: modifiers.super_key(),
         #[cfg(not(target_os = "macos"))]
         mac_cmd: false,
         #[cfg(not(target_os = "macos"))]
-        command: modifiers.ctrl(),
+        command: modifiers.control_key(),
     }
 }
 
@@ -511,7 +561,7 @@ fn egui_to_winit_cursor_icon(icon: egui::CursorIcon) -> Option<winit::window::Cu
         Default => Some(CursorIcon::Default),
         ContextMenu => Some(CursorIcon::ContextMenu),
         Help => Some(CursorIcon::Help),
-        PointingHand => Some(CursorIcon::Hand),
+        PointingHand => Some(CursorIcon::Pointer),
         Progress => Some(CursorIcon::Progress),
         Wait => Some(CursorIcon::Wait),
         Cell => Some(CursorIcon::Cell),
@@ -544,14 +594,4 @@ fn egui_to_winit_cursor_icon(icon: egui::CursorIcon) -> Option<winit::window::Cu
         ZoomOut => Some(CursorIcon::ZoomOut),
         None => Option::None,
     }
-}
-
-/// We only want printable characters and ignore all special keys.
-#[inline]
-fn is_printable(chr: char) -> bool {
-    let is_in_private_use_area = ('\u{e000}'..='\u{f8ff}').contains(&chr)
-        || ('\u{f0000}'..='\u{ffffd}').contains(&chr)
-        || ('\u{100000}'..='\u{10fffd}').contains(&chr);
-
-    !is_in_private_use_area && !chr.is_ascii_control()
 }
