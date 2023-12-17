@@ -16,7 +16,7 @@ use egui::{
 use winit::{
     dpi::PhysicalSize,
     event::{Event, TouchPhase, WindowEvent::*, Ime},
-    window::CursorIcon, keyboard::{ModifiersState, self, NamedKey, Key, SmolStr},
+    window::CursorIcon, keyboard::{ModifiersState, NamedKey, Key},
 };
 
 /// Configures the creation of the `Platform`.
@@ -317,36 +317,43 @@ impl Platform {
                 },
                 KeyboardInput { event, .. } => {
                     let pressed = event.state == winit::event::ElementState::Pressed;
+                    
+                    if let Some(text) = event.text.as_ref() {
+                        if text.chars().all(is_printable) && !self.modifier.control_key() && !self.modifier.super_key() {
+                            self.raw_input.events.push(egui::Event::Text(text.to_string()));
+                        }
+                    }
 
-                    if let Some(text) = event.text.as_ref().filter(|s| s.len() > 1) {
-                        self.raw_input.events.push(egui::Event::Text(text.to_string()));
-                    } else {
-                        match event.logical_key {
-                            keyboard::Key::Named(NamedKey::Copy) => {
-                                self.raw_input.events.push(egui::Event::Copy)
-                            },
-                            keyboard::Key::Named(NamedKey::Cut) => {
-                                self.raw_input.events.push(egui::Event::Cut)
-                            },
-                            keyboard::Key::Named(NamedKey::Paste) => {
+                    if pressed && self.modifier.control_key() {
+                        match event.logical_key.clone() {
+                            Key::Character(c) if c.to_ascii_lowercase() == "c" => {
+                                self.raw_input.events.push(egui::Event::Copy);
+                                return;
+                            }
+                            Key::Character(c) if c.to_ascii_lowercase() == "x" => {
+                                self.raw_input.events.push(egui::Event::Cut);
+                                return;
+                            }
+                            Key::Character(c) if c.to_ascii_lowercase() == "v" => {
                                 #[cfg(feature = "clipboard")]
                                 if let Some(ref mut clipboard) = self.clipboard {
                                     if let Ok(contents) = clipboard.get_contents() {
-                                        self.raw_input.events.push(egui::Event::Text(contents))
+                                        self.raw_input.events.push(egui::Event::Text(contents));
                                     }
                                 }
+                                return;
                             }
-                            _ => {
-                                if let Some(key) = winit_to_egui_key_code(event.logical_key.clone()) {
-                                    self.raw_input.events.push(egui::Event::Key {
-                                        key,
-                                        pressed,
-                                        modifiers: winit_to_egui_modifiers(self.modifier),
-                                        repeat: false,
-                                    });
-                                }
-                            }
+                            _ => {}
                         }
+                    }
+
+                    if let Some(key) = winit_to_egui_key_code(event.logical_key.clone()) {
+                        self.raw_input.events.push(egui::Event::Key {
+                            key,
+                            pressed,
+                            modifiers: winit_to_egui_modifiers(self.modifier),
+                            repeat: false,
+                        });
                     }
                 }
                 _ => {}
@@ -436,45 +443,6 @@ impl Platform {
 /// Translates winit to egui keycodes.
 #[inline]
 fn winit_to_egui_key_code(key: Key) -> Option<egui::Key> {
-
-    const KEY1: SmolStr = SmolStr::new_inline("1");
-    const KEY2: SmolStr = SmolStr::new_inline("2");
-    const KEY3: SmolStr = SmolStr::new_inline("3");
-    const KEY4: SmolStr = SmolStr::new_inline("4");
-    const KEY5: SmolStr = SmolStr::new_inline("5");
-    const KEY6: SmolStr = SmolStr::new_inline("6");
-    const KEY7: SmolStr = SmolStr::new_inline("7");
-    const KEY8: SmolStr = SmolStr::new_inline("8");
-    const KEY9: SmolStr = SmolStr::new_inline("9");
-    const KEY0: SmolStr = SmolStr::new_inline("0");
-
-    const KEY_A: SmolStr = SmolStr::new_inline("a");
-    const KEY_B: SmolStr = SmolStr::new_inline("b");
-    const KEY_C: SmolStr = SmolStr::new_inline("c");
-    const KEY_D: SmolStr = SmolStr::new_inline("d");
-    const KEY_E: SmolStr = SmolStr::new_inline("e");
-    const KEY_F: SmolStr = SmolStr::new_inline("f");
-    const KEY_G: SmolStr = SmolStr::new_inline("g");
-    const KEY_H: SmolStr = SmolStr::new_inline("h");
-    const KEY_I: SmolStr = SmolStr::new_inline("i");
-    const KEY_J: SmolStr = SmolStr::new_inline("j");
-    const KEY_K: SmolStr = SmolStr::new_inline("k");
-    const KEY_L: SmolStr = SmolStr::new_inline("l");
-    const KEY_M: SmolStr = SmolStr::new_inline("m");
-    const KEY_N: SmolStr = SmolStr::new_inline("n");
-    const KEY_O: SmolStr = SmolStr::new_inline("o");
-    const KEY_P: SmolStr = SmolStr::new_inline("p");
-    const KEY_Q: SmolStr = SmolStr::new_inline("q");
-    const KEY_R: SmolStr = SmolStr::new_inline("r");
-    const KEY_S: SmolStr = SmolStr::new_inline("s");
-    const KEY_T: SmolStr = SmolStr::new_inline("t");
-    const KEY_U: SmolStr = SmolStr::new_inline("u");
-    const KEY_V: SmolStr = SmolStr::new_inline("v");
-    const KEY_W: SmolStr = SmolStr::new_inline("w");
-    const KEY_X: SmolStr = SmolStr::new_inline("x");
-    const KEY_Y: SmolStr = SmolStr::new_inline("y");
-    const KEY_Z: SmolStr = SmolStr::new_inline("z");
-
     Some(match key {
         Key::Named(NamedKey::Escape) => egui::Key::Escape,
         Key::Named(NamedKey::Insert) => egui::Key::Insert,
@@ -491,42 +459,42 @@ fn winit_to_egui_key_code(key: Key) -> Option<egui::Key> {
         Key::Named(NamedKey::Enter) => egui::Key::Enter,
         Key::Named(NamedKey::Tab) => egui::Key::Tab,
         Key::Named(NamedKey::Space) => egui::Key::Space,
-        Key::Character(c) if c == KEY1 => egui::Key::Num1,
-        Key::Character(c) if c == KEY2 => egui::Key::Num2,
-        Key::Character(c) if c == KEY3 => egui::Key::Num3,
-        Key::Character(c) if c == KEY4 => egui::Key::Num4,
-        Key::Character(c) if c == KEY5 => egui::Key::Num5,
-        Key::Character(c) if c == KEY6 => egui::Key::Num6,
-        Key::Character(c) if c == KEY7 => egui::Key::Num7,
-        Key::Character(c) if c == KEY8 => egui::Key::Num8,
-        Key::Character(c) if c == KEY9 => egui::Key::Num9,
-        Key::Character(c) if c == KEY0 => egui::Key::Num0,
-        Key::Character(c) if c == KEY_A => egui::Key::A,
-        Key::Character(c) if c == KEY_B => egui::Key::B,
-        Key::Character(c) if c == KEY_C => egui::Key::C,
-        Key::Character(c) if c == KEY_D => egui::Key::D,
-        Key::Character(c) if c == KEY_E => egui::Key::E,
-        Key::Character(c) if c == KEY_F => egui::Key::F,
-        Key::Character(c) if c == KEY_G => egui::Key::G,
-        Key::Character(c) if c == KEY_H => egui::Key::H,
-        Key::Character(c) if c == KEY_I => egui::Key::I,
-        Key::Character(c) if c == KEY_J => egui::Key::J,
-        Key::Character(c) if c == KEY_K => egui::Key::K,
-        Key::Character(c) if c == KEY_L => egui::Key::L,
-        Key::Character(c) if c == KEY_M => egui::Key::M,
-        Key::Character(c) if c == KEY_N => egui::Key::N,
-        Key::Character(c) if c == KEY_O => egui::Key::O,
-        Key::Character(c) if c == KEY_P => egui::Key::P,
-        Key::Character(c) if c == KEY_Q => egui::Key::Q,
-        Key::Character(c) if c == KEY_R => egui::Key::R,
-        Key::Character(c) if c == KEY_S => egui::Key::S,
-        Key::Character(c) if c == KEY_T => egui::Key::T,
-        Key::Character(c) if c == KEY_U => egui::Key::U,
-        Key::Character(c) if c == KEY_V => egui::Key::V,
-        Key::Character(c) if c == KEY_W => egui::Key::W,
-        Key::Character(c) if c == KEY_X => egui::Key::X,
-        Key::Character(c) if c == KEY_Y => egui::Key::Y,
-        Key::Character(c) if c == KEY_Z => egui::Key::Z,
+        Key::Character(c) if c == "1" => egui::Key::Num1,
+        Key::Character(c) if c == "2" => egui::Key::Num2,
+        Key::Character(c) if c == "3" => egui::Key::Num3,
+        Key::Character(c) if c == "4" => egui::Key::Num4,
+        Key::Character(c) if c == "5" => egui::Key::Num5,
+        Key::Character(c) if c == "6" => egui::Key::Num6,
+        Key::Character(c) if c == "7" => egui::Key::Num7,
+        Key::Character(c) if c == "8" => egui::Key::Num8,
+        Key::Character(c) if c == "9" => egui::Key::Num9,
+        Key::Character(c) if c == "0" => egui::Key::Num0,
+        Key::Character(c) if c.to_ascii_lowercase() == "a" => egui::Key::A,
+        Key::Character(c) if c.to_ascii_lowercase() == "b" => egui::Key::B,
+        Key::Character(c) if c.to_ascii_lowercase() == "c" => egui::Key::C,
+        Key::Character(c) if c.to_ascii_lowercase() == "d" => egui::Key::D,
+        Key::Character(c) if c.to_ascii_lowercase() == "e" => egui::Key::E,
+        Key::Character(c) if c.to_ascii_lowercase() == "f" => egui::Key::F,
+        Key::Character(c) if c.to_ascii_lowercase() == "g" => egui::Key::G,
+        Key::Character(c) if c.to_ascii_lowercase() == "h" => egui::Key::H,
+        Key::Character(c) if c.to_ascii_lowercase() == "i" => egui::Key::I,
+        Key::Character(c) if c.to_ascii_lowercase() == "j" => egui::Key::J,
+        Key::Character(c) if c.to_ascii_lowercase() == "k" => egui::Key::K,
+        Key::Character(c) if c.to_ascii_lowercase() == "l" => egui::Key::L,
+        Key::Character(c) if c.to_ascii_lowercase() == "m" => egui::Key::M,
+        Key::Character(c) if c.to_ascii_lowercase() == "n" => egui::Key::N,
+        Key::Character(c) if c.to_ascii_lowercase() == "o" => egui::Key::O,
+        Key::Character(c) if c.to_ascii_lowercase() == "p" => egui::Key::P,
+        Key::Character(c) if c.to_ascii_lowercase() == "q" => egui::Key::Q,
+        Key::Character(c) if c.to_ascii_lowercase() == "r" => egui::Key::R,
+        Key::Character(c) if c.to_ascii_lowercase() == "s" => egui::Key::S,
+        Key::Character(c) if c.to_ascii_lowercase() == "t" => egui::Key::T,
+        Key::Character(c) if c.to_ascii_lowercase() == "u" => egui::Key::U,
+        Key::Character(c) if c.to_ascii_lowercase() == "v" => egui::Key::V,
+        Key::Character(c) if c.to_ascii_lowercase() == "w" => egui::Key::W,
+        Key::Character(c) if c.to_ascii_lowercase() == "x" => egui::Key::X,
+        Key::Character(c) if c.to_ascii_lowercase() == "y" => egui::Key::Y,
+        Key::Character(c) if c.to_ascii_lowercase() == "z" => egui::Key::Z,
         _ => {
             return None;
         }
@@ -592,4 +560,14 @@ fn egui_to_winit_cursor_icon(icon: egui::CursorIcon) -> Option<winit::window::Cu
         ZoomOut => Some(CursorIcon::ZoomOut),
         None => Option::None,
     }
+}
+
+/// We only want printable characters and ignore all special keys.
+#[inline]
+fn is_printable(chr: char) -> bool {
+    let is_in_private_use_area = ('\u{e000}'..='\u{f8ff}').contains(&chr)
+        || ('\u{f0000}'..='\u{ffffd}').contains(&chr)
+        || ('\u{100000}'..='\u{10fffd}').contains(&chr);
+
+    !is_in_private_use_area && !chr.is_ascii_control()
 }
