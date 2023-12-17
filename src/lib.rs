@@ -85,7 +85,6 @@ impl Platform {
         context.set_fonts(descriptor.font_definitions.clone());
         context.set_style(descriptor.style);
         let raw_input = egui::RawInput {
-            pixels_per_point: Some(descriptor.scale_factor as f32),
             screen_rect: Some(egui::Rect::from_min_size(
                 Pos2::default(),
                 vec2(
@@ -137,7 +136,6 @@ impl Platform {
                     inner_size_writer: _,
                 } => {
                     self.scale_factor = *scale_factor;
-                    self.raw_input.pixels_per_point = Some(*scale_factor as f32);
                 }
                 MouseInput { state, button, .. } => {
                     if let winit::event::MouseButton::Other(..) = button {
