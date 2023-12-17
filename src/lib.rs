@@ -61,7 +61,7 @@ pub struct Platform {
     scale_factor: f64,
     context: Context,
     raw_input: egui::RawInput,
-    modifier: ModifiersState,
+    modifier_state: ModifiersState,
     pointer_pos: Option<egui::Pos2>,
 
     #[cfg(feature = "clipboard")]
@@ -99,7 +99,7 @@ impl Platform {
             scale_factor: descriptor.scale_factor,
             context,
             raw_input,
-            modifier: winit::keyboard::ModifiersState::empty(),
+            modifier_state: winit::keyboard::ModifiersState::empty(),
             pointer_pos: Some(Pos2::default()),
             #[cfg(feature = "clipboard")]
             clipboard: ClipboardContext::new().ok(),
@@ -293,7 +293,7 @@ impl Platform {
                     self.raw_input.events.push(egui::Event::PointerGone);
                 }
                 ModifiersChanged(input) => {
-                    self.modifier = input.state();
+                    self.modifier_state = input.state();
                     self.raw_input.modifiers = winit_to_egui_modifiers(input.state());
                 }
                 Ime(ime) => {
@@ -319,12 +319,12 @@ impl Platform {
                     let pressed = event.state == winit::event::ElementState::Pressed;
                     
                     if let Some(text) = event.text.as_ref() {
-                        if text.chars().all(is_printable) && !self.modifier.control_key() && !self.modifier.super_key() {
+                        if text.chars().all(is_printable) && !self.modifier_state.control_key() && !self.modifier_state.super_key() {
                             self.raw_input.events.push(egui::Event::Text(text.to_string()));
                         }
                     }
 
-                    if pressed && self.modifier.control_key() {
+                    if pressed && self.modifier_state.control_key() {
                         match event.logical_key.clone() {
                             Key::Character(c) if c.to_ascii_lowercase() == "c" => {
                                 self.raw_input.events.push(egui::Event::Copy);
@@ -351,7 +351,7 @@ impl Platform {
                         self.raw_input.events.push(egui::Event::Key {
                             key,
                             pressed,
-                            modifiers: winit_to_egui_modifiers(self.modifier),
+                            modifiers: winit_to_egui_modifiers(self.modifier_state),
                             repeat: false,
                         });
                     }
